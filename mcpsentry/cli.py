@@ -10,7 +10,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 INJECT_RE = re.compile(
     r"(ignore (all )?(previous|prior) (instructions|prompts)|disregard (your )?(system )?prompt|"
@@ -49,7 +49,13 @@ def iter_tools(data: Any) -> list[tuple[str, dict[str, Any]]]:
                     name = f"{server_name}.{tool.get('name') or '(unnamed)'}"
                     tools.append((name, tool))
             return tools
-    raise ValueError("expected a tool array or an object with tools/servers")
+        if "mcpServers" in data:
+            for server_name, cfg in data["mcpServers"].items():
+                for tool in (cfg or {}).get("tools") or [] if isinstance(cfg, dict) else []:
+                    name = f"{server_name}.{tool.get('name') or '(unnamed)'}"
+                    tools.append((name, tool))
+            return tools
+    raise ValueError("expected a tool array or an object with tools/servers/mcpServers")
 
 
 def lint_tool(name: str, tool: dict[str, Any]) -> list[Finding]:
@@ -101,8 +107,7 @@ def lint_tool(name: str, tool: dict[str, Any]) -> list[Finding]:
 
     annotations = tool.get("annotations") or {}
     looks_destructive = bool(WRITE_NAME_RE.search(name.split(".")[-1]))
-    if looks_destructive and not annotations.get("destructiveHint") and annotations.get("readOnlyHint") is not True:
-        # missing destructiveHint on a write-like name
+    if looks_destructive:
         if annotations.get("readOnlyHint") is True:
             findings.append(Finding(
                 "warning",
@@ -110,7 +115,7 @@ def lint_tool(name: str, tool: dict[str, Any]) -> list[Finding]:
                 "tool name looks destructive but annotations.readOnlyHint is true",
                 name,
             ))
-        else:
+        elif not annotations.get("destructiveHint"):
             findings.append(Finding(
                 "warning",
                 "missing-destructive-hint",
@@ -143,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         if not path.is_file():
             print(f"error: file not found: {path}", file=sys.stderr)
             return 1
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8", errors="replace")
     try:
         data = json.loads(raw)
         findings = lint_data(data)
